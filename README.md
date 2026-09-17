@@ -22,9 +22,7 @@ files/                                     ← 按仓库相对路径排放，直
   diffsynth/models/sla_kernel.py           块稀疏 kernel（forward + torch 重算反向）
   diffsynth/models/sla_utils.py            块 mean-pool 打分 + top-k 选块
   diffsynth/models/minimax_h3_dit.py       SLA 挂载点（换 DiT 只改这里）
-  diffsynth/core/loader/model.py           【改】缺 proj_l 时放宽 load_state_dict strict
   diffsynth/core/offload_training/manager.py 【改】torch.cuda.synchronize → NPU 分支
-  diffsynth/core/data/operators.py         【改】音频加载 torchaudio → soundfile 回退
   diffsynth/configs/model_configs.py       【改】注册 SLA ckpt 的 model_hash
   diffsynth/diffusion/loss.py              【改】TeacherAlign 逐层对齐 loss + sigma 加权
   diffsynth/diffusion/training_module.py   【改】task 判定 startswith("sft:train")，覆盖 train_align
@@ -34,7 +32,7 @@ files/                                     ← 按仓库相对路径排放，直
   examples/.../model_training/train.py     【改】训练入口（全部 SLA 超参 + 阶段开关）
   examples/.../full/accelerate_config_zero3_16gpu_offload.yaml    stage2 / stage1-16卡
   examples/.../full/accelerate_config_single_gpu.yaml             stage1 单卡
-patches/sla-finetune.patch                 11 个改动文件的 git diff（与 files/ 二选一）
+patches/sla-finetune.patch                 9 个改动文件的 git diff（与 files/ 二选一）
 scripts/
   stage1/  train_newcont_proj_1g_128.sh        ← stage1 单卡（--proj-only --teacher-align）
            train_newcont_proj_16g_128.sh       ← stage1 16 卡版
