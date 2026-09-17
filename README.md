@@ -2,10 +2,7 @@
 
 SLA(Sparse-Linear Attention, arXiv:2509.24006)接到 DiT 上做少量全参微调，让模型适应块级稀疏注意力
 (~95% 稀疏)。本包是 DiffSynth(昇腾 NPU)上 **MiniMax-H3 T2VA 音视频 DiT** 两阶段微调的全部代码、
-启动脚本、配置与踩坑记录，可整体搬到别的仓库。
-
-- 上游基座：`minimax_dmd`(DiffSynth 派生) @ `91b83d8`(2026-08-10)
-- 新增 4 个文件；改动 14 个文件（`patches/sla-finetune.patch`，421 行）
+启动脚本、配置与踩坑记录。
 - 最后一次实跑：stage1 单卡 1000 步 → 合并成 `newcont309-proj1000` → stage2 全量 4959 条 / ~310 步
   （topk 0.05，768×1344×124，ZeRO-3 16 卡 + CPU offload）
 
