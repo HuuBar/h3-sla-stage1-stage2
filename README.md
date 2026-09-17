@@ -7,15 +7,15 @@ SLA(Sparse-Linear Attention, arXiv:2509.24006)接到 DiT 上做少量全参微�
 - 上游基座：`minimax_dmd`(DiffSynth 派生) @ `91b83d8`(2026-08-10)
 - 新增 4 个文件；改动 14 个文件（`patches/sla-finetune.patch`，421 行）
 - 最后一次实跑：stage1 单卡 1000 步 → 合并成 `newcont309-proj1000` → stage2 全量 4959 条 / ~310 步
-  （130 机，开放竞争 topk 0.05，768×1344×124，ZeRO-3 16 卡 + CPU offload）
+  （topk 0.05，768×1344×124，ZeRO-3 16 卡 + CPU offload）
 
 ## 两阶段是什么
 
 | 阶段 | 做什么 | 产物 |
 |---|---|---|
-| **stage1** | 冻结主干，**只训 `proj_l`**(50×128×128 ≈ 0.83M)；loss = 每层 `o_sla` vs 全注意力 `o_full` 的 MSE（teacher 对齐），主干零漂移 | 只有 proj_l（100 keys，3.3MB） |
+| **stage1** | 冻结主干，**只训 `proj_l`**(50×128×128 ≈ 0.83M)；loss = 每层 `o_sla` vs 全注意力 `o_full` 的 MSE（teacher 对齐）|
 | **merge** | 把 proj_l 覆盖写回主干 | 635 keys 完整 ckpt（66GB） |
-| **stage2** | 解冻主干**联合微调**：主干 lr 1e-5 / proj_l 5e-5，标准 flow-matching SFT | 完整 ckpt |
+| **stage2** | **联合微调**：主干 lr 1e-5 / proj_l 5e-5，标准 flow-matching SFT | 完整 ckpt |
 
 ---
 
@@ -23,11 +23,11 @@ SLA(Sparse-Linear Attention, arXiv:2509.24006)接到 DiT 上做少量全参微�
 
 ```
 files/                                     ← 按仓库相对路径排放，直接 `cp -r files/* <你的仓库>/`
-  diffsynth/models/sla_core.py             【新增】SLA 模块（稀疏分支 + 线性分支 proj_l）
-  diffsynth/models/sla_kernel.py           【新增】块稀疏 kernel（forward + torch 重算反向）
-  diffsynth/models/sla_utils.py            【新增】块 mean-pool 打分 + top-k 选块
-  diffsynth/models/sla_reference.py        【新增】纯 torch 参考实现（数值对拍）
-  diffsynth/models/minimax_h3_dit.py       【改】SLA 挂载点（换 DiT 只改这里）
+  diffsynth/models/sla_core.py             SLA 模块（稀疏分支 + 线性分支 proj_l）
+  diffsynth/models/sla_kernel.py           块稀疏 kernel（forward + torch 重算反向）
+  diffsynth/models/sla_utils.py            块 mean-pool 打分 + top-k 选块
+  diffsynth/models/sla_reference.py        纯 torch 参考实现（数值对拍）
+  diffsynth/models/minimax_h3_dit.py       SLA 挂载点（换 DiT 只改这里）
   diffsynth/models/model_loader.py         【改】┐
   diffsynth/core/loader/config.py          【改】├ extra_kwargs 透传
   diffsynth/diffusion/base_pipeline.py     【改】┘
@@ -63,20 +63,6 @@ docs/
   h3_sla_training_log.md                到 8/15 的训练全记录 + 白屏根因链
   sla_retrain_plan.md / h3_sla_training_plan.md   重训方案 / 原始计划
 ```
-
-## 接到别的仓库
-
-```bash
-cp -r sla_ft_pkg/files/* <你的仓库>/                                  # 方式 A：直接覆盖（推荐）
-cd <你的仓库> && git apply /path/sla_ft_pkg/patches/sla-finetune.patch  # 方式 B：打补丁
-```
-两个接入点：
-1. **注意力替换**：`minimax_h3_dit.py` 里在每个 block 的 `attn` 上挂 `sla_module`（含可训练 `proj_l`，零初始化），
-   把原来的注意力调用换成 `sla_module(q, k, v)`。换到别的 DiT 就改这一处。
-2. **参数透传**：`model_loader.py` / `core/loader/config.py` / `base_pipeline.py`，让模型构造能收到
-   `use_sla / sla_topk / sla_feature_map / sla_blkq / sla_blkk`。
-
----
 
 ## stage1 怎么跑
 
@@ -125,7 +111,7 @@ posi["prompt_embeds"]          # (343, 5120) bf16          文本条件
 posi["packed"]                 # img_pos/audio_pos/text_pos/img_position_ids/token_tags/cu_seqlens/seq_len(=38080)
 ```
 
-## 五个必知的坑
+## 注意
 
 1. **`use_sla` 命中检查要求模型路径含 `transformer`**（`train.py:52`）：起点 ckpt 先软链成
    `dataset/transformer_xxx_link.safetensors`，否则按稠密构造，SLA 静默失效。
@@ -133,7 +119,5 @@ posi["packed"]                 # img_pos/audio_pos/text_pos/img_position_ids/tok
 3. **teacher 对齐必须关 gradient checkpointing**：重算 forward 会二次触发每层 backward，梯度重复累加。
 4. **stage1 16 卡有风险**：bf16 主干全冻结 + 只有 fp32 proj_l 有梯度，会触发 deepspeed 0.19.4 的梯度分桶(ds_id)断言；
    单卡版（proj_l 仅 3MB）是已验证路线。
-5. **低噪端欠训练会导致推理末步过冲→白屏**：shift=12 下均匀采 timestep 时 σ<0.2 只占 ~2% 火力，
-   需靠 `--timestep-grid` / `--sigma-weight-cap` 修正（详见 docs/sla_h3_sparse_training_report.md）。
 
 许可：`sla_*.py` 来自 SLA 官方，Apache-2.0，引用 `arXiv:2509.24006`。
