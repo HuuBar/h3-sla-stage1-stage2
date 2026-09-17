@@ -38,7 +38,6 @@ scripts/
   stage2/  train_backbone_full_130.sh          ← 最后一次全量微调
            train_backbone_full_run_130.sh      ← 启动器
            prep_stage2_full_128.py             ← 构建 stage2 数据缓存（4959 条）
-  reference_108/  更早几轮的 768p 启动脚本（opencomp 156 / proj-156 / proj-1000 / merge_sla_dmd 等）
   container/      训练容器启动脚本（设备 + Ascend 驱动挂载）
 ```
 
