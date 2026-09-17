@@ -1,8 +1,8 @@
 diff --git a/diffsynth/configs/model_configs.py b/diffsynth/configs/model_configs.py
-index 2b736e5..ba4b1ea 100644
+index 2b736e5..d6ae418 100644
 --- a/diffsynth/configs/model_configs.py
 +++ b/diffsynth/configs/model_configs.py
-@@ -1393,6 +1393,14 @@ minimax_h3_series = [
+@@ -1393,6 +1393,24 @@ minimax_h3_series = [
          "model_name": "minimax_h3_dit",
          "model_class": "diffsynth.models.minimax_h3_dit.MiniMaxH3DiT",
      },
@@ -10,9 +10,19 @@ index 2b736e5..ba4b1ea 100644
 +        # SLA 微调产物 (训练保存去掉了 pipe.dit. 前缀, 含 proj_l 新增参数).
 +        # hash 只依赖 key+shape: step-125/250/500 等所有 SLA 训练 ckpt 共用此 hash,
 +        # 可直接作为 model_paths 加载 (zero3 下不能用 --resume_from_checkpoint 的 load_state_dict).
++        # extra_kwargs 在这里直接给出 SLA 构造参数: 上游 loader 会 model_class(**extra_kwargs),
++        # 因此不需要改动 base_pipeline / model_loader / ModelConfig 去透传命令行参数。
++        # 代价: 换 topk / 块大小要改这里, 命令行 --sla_topk 之类不再生效。
 +        "model_hash": "922fd0b8092bc8bb35b5d3a0a1088389",
 +        "model_name": "minimax_h3_dit",
 +        "model_class": "diffsynth.models.minimax_h3_dit.MiniMaxH3DiT",
++        "extra_kwargs": {
++            "use_sla": True,
++            "sla_topk": 0.05,
++            "sla_feature_map": "softmax",
++            "sla_blkq": 64,
++            "sla_blkk": 64,
++        },
 +    },
      {
          # Example: ModelConfig(model_id="DiffSynth-Studio/MiniMax-H3-NF4", origin_file_pattern="minimax-h3-fl2va-nf4.safetensors")
@@ -31,82 +41,11 @@ index d6c38a2..d8b98e5 100644
 +            torch.npu.synchronize()
 +        else:
 +            torch.cuda.synchronize()
-diff --git a/diffsynth/diffusion/ddim_scheduler.py b/diffsynth/diffusion/ddim_scheduler.py
-index 09a5bf3..90d67e5 100644
---- a/diffsynth/diffusion/ddim_scheduler.py
-+++ b/diffsynth/diffusion/ddim_scheduler.py
-@@ -18,6 +18,7 @@ class DDIMScheduler():
-         self.set_timesteps(10)
-         self.prediction_type = prediction_type
-         self.training = False
-+        self.sigma_weight_cap = None  # >0 时 FlowMatchSFT loss 按 sigma 加权 (min-SNR 风格)
- 
- 
-     def rescale_zero_terminal_snr(self, alphas_cumprod):
-@@ -107,3 +108,18 @@ class DDIMScheduler():
-     
-     def training_weight(self, timestep):
-         return 1.0
-+
-+    def sigma_at(self, timestep):
-+        """timestep (0..999) 处的噪声水平 sigma = sqrt(1 - alpha_cumprod[t])。"""
-+        timestep_id = max(min(int(timestep.flatten().tolist()[0]), len(self.alphas_cumprod) - 1), 0)
-+        return math.sqrt(max(1.0 - self.alphas_cumprod[timestep_id], 0.0))
-+
-+    def sigma_weight(self, timestep, cap=10.0):
-+        """按 sigma 加权 (min-SNR 风格): weight = min(1/sigma^2, cap), 低噪端权重大。
-+        默认 cap=10; cap<=0 表示不加权 (恒 1)。"""
-+        if cap is None or cap <= 0:
-+            return 1.0
-+        s = self.sigma_at(timestep)
-+        if s < 1e-6:
-+            return float(cap)
-+        return min(1.0 / (s * s), float(cap))
-diff --git a/diffsynth/diffusion/flow_match.py b/diffsynth/diffusion/flow_match.py
-index 2547d19..4db9314 100644
---- a/diffsynth/diffusion/flow_match.py
-+++ b/diffsynth/diffusion/flow_match.py
-@@ -23,6 +23,7 @@ class FlowMatchScheduler():
-             "MiniMax-H3": FlowMatchScheduler.set_timesteps_minimax_h3,
-         }.get(template, FlowMatchScheduler.set_timesteps_flux)
-         self.num_train_timesteps = 1000
-+        self.sigma_weight_cap = None  # >0 时 FlowMatchSFT loss 按 sigma 加权 (min-SNR 风格)
- 
-     @staticmethod
-     def set_timesteps_flux(num_inference_steps=100, denoising_strength=1.0, shift=None):
-@@ -370,6 +371,16 @@ class FlowMatchScheduler():
-         weights = self.linear_timesteps_weights[timestep_id]
-         return weights
- 
-+    def sigma_weight(self, timestep, cap=10.0):
-+        """min-SNR 风格 sigma 加权: weight = min(1/sigma^2, cap), 低噪端权重大。
-+        FlowMatch 的 sigma 直接是噪声水平 (sigmas 属性)。"""
-+        if isinstance(timestep, torch.Tensor):
-+            timestep = timestep.to(self.timesteps.device)
-+        timestep_id = torch.argmin((self.timesteps - timestep).abs())
-+        sigma = self.sigmas[timestep_id].float().clamp(min=1e-3)
-+        w = (1.0 / (sigma * sigma)).clamp(max=float(cap))
-+        return w
-+
- 
- class HiDreamO1FlashScheduler(FlowMatchScheduler):
-     
 diff --git a/diffsynth/diffusion/loss.py b/diffsynth/diffusion/loss.py
-index 8d55517..d12aef3 100644
+index 8d55517..a65b964 100644
 --- a/diffsynth/diffusion/loss.py
 +++ b/diffsynth/diffusion/loss.py
-@@ -89,11 +89,74 @@ def FlowMatchSFTMiniMaxH3AudioVideoLoss(pipe: BasePipeline, **inputs):
- 
-     loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float())
-     loss = loss * pipe.scheduler.training_weight(timestep_video)
-+    if pipe.scheduler.sigma_weight_cap is not None and pipe.scheduler.sigma_weight_cap > 0:
-+        w_sigma = pipe.scheduler.sigma_weight(timestep_video, cap=pipe.scheduler.sigma_weight_cap)
-+        loss = loss * w_sigma
-     loss_audio = torch.nn.functional.mse_loss(noise_pred_audio.float(), training_target_audio.float())
-     loss_audio = loss_audio * pipe.scheduler_audio.training_weight(timestep_audio)
-+    if pipe.scheduler_audio.sigma_weight_cap is not None and pipe.scheduler_audio.sigma_weight_cap > 0:
-+        w_sigma_a = pipe.scheduler_audio.sigma_weight(timestep_audio, cap=pipe.scheduler_audio.sigma_weight_cap)
-+        loss_audio = loss_audio * w_sigma_a
+@@ -94,6 +94,63 @@ def FlowMatchSFTMiniMaxH3AudioVideoLoss(pipe: BasePipeline, **inputs):
      return loss + loss_audio
  
  
@@ -439,7 +378,7 @@ index 2a4684e..867f4cf 100644
 +            return None
 +        return sum(vals) / len(vals)
 diff --git a/examples/minimax_h3/model_training/train.py b/examples/minimax_h3/model_training/train.py
-index e6369f1..ac483be 100644
+index e6369f1..771c97e 100644
 --- a/examples/minimax_h3/model_training/train.py
 +++ b/examples/minimax_h3/model_training/train.py
 @@ -27,6 +27,13 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
@@ -451,7 +390,7 @@ index e6369f1..ac483be 100644
 +        max_timestep_boundary=1.0, min_timestep_boundary=0.0,
 +        mix_low_noise_ratio=0.0,
 +        teacher_align=False, align_timesteps=50, init_proj=None,
-+        timestep_grid=None, sigma_weight_cap=None,
++        timestep_grid=None,
 +        proj_only=False, proj_lr=None,
      ):
          super().__init__()
@@ -484,7 +423,7 @@ index e6369f1..ac483be 100644
          self.pipe = MiniMaxH3Pipeline.from_pretrained(torch_dtype=torch.bfloat16, device=device, model_configs=model_configs, **pipe_kwargs)
          self.pipe = self.split_pipeline_units(
              task, self.pipe, trainable_models, lora_base_model,
-@@ -58,17 +81,72 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
+@@ -58,17 +81,66 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
          self.pipe.scheduler.set_timesteps(1000, training=True, shift=12.0)
          self.pipe.scheduler_audio.set_timesteps(1000, training=True, shift=3.0)
  
@@ -525,12 +464,6 @@ index e6369f1..ac483be 100644
 +        # 合并 hash 922fd0b8 匹配 SLA 产物配置, zero3 安全)。zero3 分片下不能用 load_state_dict
 +        # 手动灌全量权重 (每 rank 只有分片, size mismatch)。
 +
-+        # sigma 加权 (min-SNR 风格): >0 时 FlowMatchSFT loss 乘 weight=min(1/sigma^2, cap)
-+        if sigma_weight_cap is not None and sigma_weight_cap > 0:
-+            self.pipe.scheduler.sigma_weight_cap = sigma_weight_cap
-+            self.pipe.scheduler_audio.sigma_weight_cap = sigma_weight_cap
-+            print(f"[train] sigma_weight: cap={sigma_weight_cap} (min-SNR 风格, 低噪端权重大)")
-+
          # Store other configs
          self.use_gradient_checkpointing = use_gradient_checkpointing
          self.use_gradient_checkpointing_offload = use_gradient_checkpointing_offload
@@ -557,7 +490,7 @@ index e6369f1..ac483be 100644
  
      def parse_extra_inputs(self, data, extra_inputs, inputs_shared):
          # First/last-frame conditioning is derived from the training video itself, following the
-@@ -113,6 +191,9 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
+@@ -113,6 +185,9 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
              "rand_device": "cpu",
              "use_gradient_checkpointing": self.use_gradient_checkpointing,
              "use_gradient_checkpointing_offload": self.use_gradient_checkpointing_offload,
@@ -567,7 +500,7 @@ index e6369f1..ac483be 100644
          }
          inputs_shared = self.parse_extra_inputs(data, self.extra_inputs, inputs_shared)
          return inputs_shared, inputs_posi, inputs_nega
-@@ -120,6 +201,14 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
+@@ -120,6 +195,14 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
      def forward(self, data, inputs=None):
          if inputs is None: inputs = self.get_pipeline_inputs(data)
          inputs = self.transfer_data_to_device(inputs, self.pipe.device, self.pipe.torch_dtype)
@@ -582,7 +515,7 @@ index e6369f1..ac483be 100644
          for unit in self.pipe.units:
              inputs = self.pipe.unit_runner(unit, self.pipe, *inputs)
          loss = self.task_to_loss[self.task](self.pipe, *inputs)
-@@ -132,6 +221,22 @@ def minimax_h3_parser():
+@@ -132,6 +215,21 @@ def minimax_h3_parser():
      parser = add_video_size_config(parser)
      parser.add_argument("--processor_path", type=str, default=None, help="Path or `model_id:pattern` of the Qwen3-VL processor.")
      parser.add_argument("--initialize_model_on_cpu", default=False, action="store_true", help="Whether to initialize models on CPU.")
@@ -598,14 +531,13 @@ index e6369f1..ac483be 100644
 +    parser.add_argument("--teacher-align", default=False, action="store_true", help="阶段二: 主干+proj_l 联合, loss=每层 o_sla vs o_full 对齐 (50 点推理网格采样)")
 +    parser.add_argument("--align-timesteps", type=int, default=50, help="teacher-align 网格点数 (默认 50 = 推理网格)")
 +    parser.add_argument("--timestep-grid", type=int, default=None, help="训练 timestep 从 N 点推理网格采 (独立于 teacher-align; 0/None=全区间 0-999)")
-+    parser.add_argument("--sigma-weight-cap", type=float, default=None, help=">0 时 loss 按 sigma 加权 (min-SNR 风格, weight=min(1/sigma^2, cap)), 低噪端权重大")
 +    parser.add_argument("--proj-only", default=False, action="store_true", help="阶段一: 冻结主干, 只训 sla_module.proj_l (SLA_PROJ_ONLY=1, 主干零漂移)")
 +    parser.add_argument("--proj-lr", type=float, default=None, help="proj_l 单独学习率 (阶段二双 lr: 主干 --learning-rate, proj_l 用此值)")
 +    parser.add_argument("--init-proj", type=str, default=None, help="proj_l 初始权重 (阶段一产物 proj_l_stepN.pt)")
      return parser
  
  
-@@ -204,6 +309,22 @@ if __name__ == "__main__":
+@@ -204,6 +302,21 @@ if __name__ == "__main__":
          remove_prefix_in_ckpt=args.remove_prefix_in_ckpt,
          task=args.task,
          device="cpu" if (args.initialize_model_on_cpu or args.enable_model_cpu_offload) else accelerator.device,
@@ -621,14 +553,13 @@ index e6369f1..ac483be 100644
 +        teacher_align=args.teacher_align,
 +        align_timesteps=args.align_timesteps,
 +        timestep_grid=args.timestep_grid,
-+        sigma_weight_cap=args.sigma_weight_cap,
 +        init_proj=args.init_proj,
 +        proj_only=args.proj_only,
 +        proj_lr=args.proj_lr,
      )
      model_logger = ModelLogger(
          args.output_path,
-@@ -218,5 +339,6 @@ if __name__ == "__main__":
+@@ -218,5 +331,6 @@ if __name__ == "__main__":
          "sft:data_process": launch_data_process_task,
          "sft": launch_training_task,
          "sft:train": launch_training_task,

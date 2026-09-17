@@ -23,16 +23,14 @@ files/                                     ← 按仓库相对路径排放，直
   diffsynth/models/sla_utils.py            块 mean-pool 打分 + top-k 选块
   diffsynth/models/minimax_h3_dit.py       SLA 挂载点（换 DiT 只改这里）
   diffsynth/core/offload_training/manager.py 【改】torch.cuda.synchronize → NPU 分支
-  diffsynth/configs/model_configs.py       【改】注册 SLA ckpt 的 model_hash
-  diffsynth/diffusion/loss.py              【改】TeacherAlign 逐层对齐 loss + sigma 加权
+  diffsynth/configs/model_configs.py       【改】注册 SLA ckpt 的 model_hash + SLA 构造参数(extra_kwargs)
+  diffsynth/diffusion/loss.py              【改】TeacherAlign 逐层对齐 loss
   diffsynth/diffusion/training_module.py   【改】task 判定 startswith("sft:train")，覆盖 train_align
   diffsynth/diffusion/runner.py            【改】双 lr + 每步 empty_cache + sla_sparsity 日志
-  diffsynth/diffusion/flow_match.py        【改】┐ sigma_weight_cap 属性
-  diffsynth/diffusion/ddim_scheduler.py    【改】┘（loss.py 会读，缺了报 AttributeError）
   examples/.../model_training/train.py     【改】训练入口（全部 SLA 超参 + 阶段开关）
   examples/.../full/accelerate_config_zero3_16gpu_offload.yaml    stage2 / stage1-16卡
   examples/.../full/accelerate_config_single_gpu.yaml             stage1 单卡
-patches/sla-finetune.patch                 9 个改动文件的 git diff（与 files/ 二选一）
+patches/sla-finetune.patch                 7 个改动文件的 git diff（与 files/ 二选一）
 scripts/
   stage1/  train_newcont_proj_1g_128.sh        ← stage1 单卡（--proj-only --teacher-align）
            train_newcont_proj_16g_128.sh       ← stage1 16 卡版
@@ -108,3 +106,6 @@ posi["packed"]                 # img_pos/audio_pos/text_pos/img_position_ids/tok
 3. **teacher 对齐必须关 gradient checkpointing**：重算 forward 会二次触发每层 backward，梯度重复累加。
 4. **stage1 16 卡有风险**：bf16 主干全冻结 + 只有 fp32 proj_l 有梯度，会触发 deepspeed 0.19.4 的梯度分桶(ds_id)断言；
    单卡版（proj_l 仅 3MB）是已验证路线。
+5. **SLA 构造参数写在 `configs/model_configs.py` 的 `extra_kwargs` 里**（上游 loader 走 `model_class(**extra_kwargs)`），
+   不走命令行透传：`--use_sla / --sla_topk / --sla_feature_map / --sla_blkq / --sla_blkk` 仍被接受但**不生效**，
+   改 topk 或块大小要改注册表那条 `extra_kwargs`；想完全关掉 SLA 就删掉它。

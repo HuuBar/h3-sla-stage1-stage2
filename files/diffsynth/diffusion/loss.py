@@ -89,14 +89,8 @@ def FlowMatchSFTMiniMaxH3AudioVideoLoss(pipe: BasePipeline, **inputs):
 
     loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float())
     loss = loss * pipe.scheduler.training_weight(timestep_video)
-    if pipe.scheduler.sigma_weight_cap is not None and pipe.scheduler.sigma_weight_cap > 0:
-        w_sigma = pipe.scheduler.sigma_weight(timestep_video, cap=pipe.scheduler.sigma_weight_cap)
-        loss = loss * w_sigma
     loss_audio = torch.nn.functional.mse_loss(noise_pred_audio.float(), training_target_audio.float())
     loss_audio = loss_audio * pipe.scheduler_audio.training_weight(timestep_audio)
-    if pipe.scheduler_audio.sigma_weight_cap is not None and pipe.scheduler_audio.sigma_weight_cap > 0:
-        w_sigma_a = pipe.scheduler_audio.sigma_weight(timestep_audio, cap=pipe.scheduler_audio.sigma_weight_cap)
-        loss_audio = loss_audio * w_sigma_a
     return loss + loss_audio
 
 

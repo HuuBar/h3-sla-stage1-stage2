@@ -1397,9 +1397,19 @@ minimax_h3_series = [
         # SLA 微调产物 (训练保存去掉了 pipe.dit. 前缀, 含 proj_l 新增参数).
         # hash 只依赖 key+shape: step-125/250/500 等所有 SLA 训练 ckpt 共用此 hash,
         # 可直接作为 model_paths 加载 (zero3 下不能用 --resume_from_checkpoint 的 load_state_dict).
+        # extra_kwargs 在这里直接给出 SLA 构造参数: 上游 loader 会 model_class(**extra_kwargs),
+        # 因此不需要改动 base_pipeline / model_loader / ModelConfig 去透传命令行参数。
+        # 代价: 换 topk / 块大小要改这里, 命令行 --sla_topk 之类不再生效。
         "model_hash": "922fd0b8092bc8bb35b5d3a0a1088389",
         "model_name": "minimax_h3_dit",
         "model_class": "diffsynth.models.minimax_h3_dit.MiniMaxH3DiT",
+        "extra_kwargs": {
+            "use_sla": True,
+            "sla_topk": 0.05,
+            "sla_feature_map": "softmax",
+            "sla_blkq": 64,
+            "sla_blkk": 64,
+        },
     },
     {
         # Example: ModelConfig(model_id="DiffSynth-Studio/MiniMax-H3-NF4", origin_file_pattern="minimax-h3-fl2va-nf4.safetensors")

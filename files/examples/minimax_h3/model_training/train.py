@@ -32,7 +32,7 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
         max_timestep_boundary=1.0, min_timestep_boundary=0.0,
         mix_low_noise_ratio=0.0,
         teacher_align=False, align_timesteps=50, init_proj=None,
-        timestep_grid=None, sigma_weight_cap=None,
+        timestep_grid=None,
         proj_only=False, proj_lr=None,
     ):
         super().__init__()
@@ -117,12 +117,6 @@ class MiniMaxH3TrainingModule(DiffusionTrainingModule):
         # 阶段二 proj_l 初始权重: 已通过 model_paths 注入 (transformer shards + proj_l_step250.safetensors
         # 合并 hash 922fd0b8 匹配 SLA 产物配置, zero3 安全)。zero3 分片下不能用 load_state_dict
         # 手动灌全量权重 (每 rank 只有分片, size mismatch)。
-
-        # sigma 加权 (min-SNR 风格): >0 时 FlowMatchSFT loss 乘 weight=min(1/sigma^2, cap)
-        if sigma_weight_cap is not None and sigma_weight_cap > 0:
-            self.pipe.scheduler.sigma_weight_cap = sigma_weight_cap
-            self.pipe.scheduler_audio.sigma_weight_cap = sigma_weight_cap
-            print(f"[train] sigma_weight: cap={sigma_weight_cap} (min-SNR 风格, 低噪端权重大)")
 
         # Store other configs
         self.use_gradient_checkpointing = use_gradient_checkpointing
@@ -233,7 +227,6 @@ def minimax_h3_parser():
     parser.add_argument("--teacher-align", default=False, action="store_true", help="阶段二: 主干+proj_l 联合, loss=每层 o_sla vs o_full 对齐 (50 点推理网格采样)")
     parser.add_argument("--align-timesteps", type=int, default=50, help="teacher-align 网格点数 (默认 50 = 推理网格)")
     parser.add_argument("--timestep-grid", type=int, default=None, help="训练 timestep 从 N 点推理网格采 (独立于 teacher-align; 0/None=全区间 0-999)")
-    parser.add_argument("--sigma-weight-cap", type=float, default=None, help=">0 时 loss 按 sigma 加权 (min-SNR 风格, weight=min(1/sigma^2, cap)), 低噪端权重大")
     parser.add_argument("--proj-only", default=False, action="store_true", help="阶段一: 冻结主干, 只训 sla_module.proj_l (SLA_PROJ_ONLY=1, 主干零漂移)")
     parser.add_argument("--proj-lr", type=float, default=None, help="proj_l 单独学习率 (阶段二双 lr: 主干 --learning-rate, proj_l 用此值)")
     parser.add_argument("--init-proj", type=str, default=None, help="proj_l 初始权重 (阶段一产物 proj_l_stepN.pt)")
@@ -321,7 +314,6 @@ if __name__ == "__main__":
         teacher_align=args.teacher_align,
         align_timesteps=args.align_timesteps,
         timestep_grid=args.timestep_grid,
-        sigma_weight_cap=args.sigma_weight_cap,
         init_proj=args.init_proj,
         proj_only=args.proj_only,
         proj_lr=args.proj_lr,
