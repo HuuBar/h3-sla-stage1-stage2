@@ -1,4 +1,4 @@
-# MiniMax-H3 SLA 稀疏注意力微调代码包（stage1 + stage2，完整版）
+# MiniMax-H3 SLA 稀疏注意力微调代码
 
 SLA(Sparse-Linear Attention, arXiv:2509.24006)接到 DiT 上做少量全参微调，让模型适应块级稀疏注意力
 (~95% 稀疏)。本包是 DiffSynth(昇腾 NPU)上 **MiniMax-H3 T2VA 音视频 DiT** 两阶段微调的全部代码、
