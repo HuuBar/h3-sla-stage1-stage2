@@ -22,21 +22,21 @@ files/                                     ← 按仓库相对路径排放，直
   diffsynth/models/sla_kernel.py           块稀疏 kernel（forward + torch 重算反向）
   diffsynth/models/sla_utils.py            块 mean-pool 打分 + top-k 选块
   diffsynth/models/minimax_h3_dit.py       SLA 挂载点（换 DiT 只改这里）
-  diffsynth/core/offload_training/manager.py 【改】torch.cuda.synchronize → NPU 分支
-  diffsynth/configs/model_configs.py       【改】注册 SLA ckpt 的 model_hash + SLA 构造参数(extra_kwargs)
-  diffsynth/diffusion/loss.py              【改】TeacherAlign 逐层对齐 loss
-  diffsynth/diffusion/training_module.py   【改】task 判定 startswith("sft:train")，覆盖 train_align
-  diffsynth/diffusion/runner.py            【改】双 lr + 每步 empty_cache + sla_sparsity 日志
-  examples/.../model_training/train.py     【改】训练入口（全部 SLA 超参 + 阶段开关）
+  diffsynth/core/offload_training/manager.py  torch.cuda.synchronize → NPU 分支
+  diffsynth/configs/model_configs.py       注册 SLA ckpt 的 model_hash + SLA 构造参数(extra_kwargs)
+  diffsynth/diffusion/loss.py              TeacherAlign 逐层对齐 loss
+  diffsynth/diffusion/training_module.py   task 判定 startswith("sft:train")，覆盖 train_align
+  diffsynth/diffusion/runner.py            双 lr + 每步 empty_cache + sla_sparsity 日志
+  examples/.../model_training/train.py     训练入口（全部 SLA 超参 + 阶段开关）
   examples/.../full/accelerate_config_zero3_16gpu_offload.yaml    stage2 / stage1-16卡
   examples/.../full/accelerate_config_single_gpu.yaml             stage1 单卡
 scripts/
   stage1/  train_newcont_proj_1g_128.sh        ← stage1 单卡（--proj-only --teacher-align）
-           train_newcont_proj_16g_128.sh       ← stage1 16 卡版
+           train_newcont_proj_16g_128.sh       ← stage1 16 卡版（未跑通）
            launch_proj_1g_130.sh               ← stage1 nohup 启动器
            merge_proj_into_backbone.py         ← proj_l 合并回主干（stage2 起点）
   stage2/  train_backbone_full_130.sh          ← 最后一次全量微调
-           train_backbone_full_run_130.sh      ← 其 nohup 启动器
+           train_backbone_full_run_130.sh      ← 启动器
            prep_stage2_full_128.py             ← 构建 stage2 数据缓存（4959 条）
   reference_108/  更早几轮的 768p 启动脚本（opencomp 156 / proj-156 / proj-1000 / merge_sla_dmd 等）
   container/      训练容器启动脚本（设备 + Ascend 驱动挂载）
