@@ -56,18 +56,6 @@ index 4f80b01..01e27c5 100644
              current_samples = waveform.shape[-1]
              if current_samples > target_samples:
                  waveform = waveform[..., :target_samples]
-diff --git a/diffsynth/core/loader/config.py b/diffsynth/core/loader/config.py
-index 636bf27..cbeaee8 100644
---- a/diffsynth/core/loader/config.py
-+++ b/diffsynth/core/loader/config.py
-@@ -59,6 +59,7 @@ class ModelConfig:
-     clear_parameters: bool = False
-     state_dict: Dict[str, torch.Tensor] = None
-     quantize: Optional[Union[QuantizeConfig, MixedQuantizeConfig]] = None
-+    extra_kwargs: Optional[dict] = None
-     
-     def check_input(self):
-         if self.path is None and self.model_id is None:
 diff --git a/diffsynth/core/loader/model.py b/diffsynth/core/loader/model.py
 index 3b1e0d5..a562b8c 100644
 --- a/diffsynth/core/loader/model.py
@@ -170,18 +158,6 @@ index d6c38a2..d8b98e5 100644
 +            torch.npu.synchronize()
 +        else:
 +            torch.cuda.synchronize()
-diff --git a/diffsynth/diffusion/base_pipeline.py b/diffsynth/diffusion/base_pipeline.py
-index 907c731..ec9b6e5 100644
---- a/diffsynth/diffusion/base_pipeline.py
-+++ b/diffsynth/diffusion/base_pipeline.py
-@@ -308,6 +308,7 @@ class BasePipeline(torch.nn.Module):
-                 clear_parameters=model_config.clear_parameters,
-                 state_dict=model_config.state_dict,
-                 quantize=model_config.quantize,
-+                extra_kwargs=model_config.extra_kwargs,
-             )
-         return model_pool
-     
 diff --git a/diffsynth/diffusion/ddim_scheduler.py b/diffsynth/diffusion/ddim_scheduler.py
 index 09a5bf3..90d67e5 100644
 --- a/diffsynth/diffusion/ddim_scheduler.py
@@ -589,46 +565,6 @@ index 2a4684e..867f4cf 100644
 +        if not vals:
 +            return None
 +        return sum(vals) / len(vals)
-diff --git a/diffsynth/models/model_loader.py b/diffsynth/models/model_loader.py
-index 3d44bee..9b87cbc 100644
---- a/diffsynth/models/model_loader.py
-+++ b/diffsynth/models/model_loader.py
-@@ -31,13 +31,15 @@ class ModelPool:
-             module_map = None
-         return module_map
-     
--    def load_model_file(self, config, path, vram_config, vram_limit=None, state_dict=None, quantize=None):
-+    def load_model_file(self, config, path, vram_config, vram_limit=None, state_dict=None, quantize=None, extra_kwargs=None):
-         model_class = self.import_model_class(config["model_class"])
-         # Resolve the quant config only after the model class import: a model file may
-         # register its own method/backend at import time (e.g. `ideogram4_fp8`), and
-         # `QuantizeConfig` looks the method up at construction.
-         quantize = self.resolve_quant_config(config, quantize)
--        model_config = config.get("extra_kwargs", {})
-+        model_config = dict(config.get("extra_kwargs", {}))
-+        if extra_kwargs:
-+            model_config.update(extra_kwargs)
-         if "state_dict_converter" in config:
-             state_dict_converter = self.import_model_class(config["state_dict_converter"])
-         else:
-@@ -77,7 +79,7 @@ class ModelPool:
-             return None
-         return QuantizeConfig(**config["quant_config"])
- 
--    def auto_load_model(self, path, vram_config=None, vram_limit=None, clear_parameters=False, state_dict=None, quantize=None):
-+    def auto_load_model(self, path, vram_config=None, vram_limit=None, clear_parameters=False, state_dict=None, quantize=None, extra_kwargs=None):
-         print(f"Loading models from: {json.dumps(path, indent=4)}")
-         if vram_config is None:
-             vram_config = self.default_vram_config()
-@@ -85,7 +87,7 @@ class ModelPool:
-         loaded = False
-         for config in MODEL_CONFIGS:
-             if config["model_hash"] == model_hash:
--                model = self.load_model_file(config, path, vram_config, vram_limit=vram_limit, state_dict=state_dict, quantize=quantize)
-+                model = self.load_model_file(config, path, vram_config, vram_limit=vram_limit, state_dict=state_dict, quantize=quantize, extra_kwargs=extra_kwargs)
-                 if clear_parameters: self.clear_parameters(model)
-                 self.model.append(model)
-                 model_name = config["model_name"]
 diff --git a/examples/minimax_h3/model_training/train.py b/examples/minimax_h3/model_training/train.py
 index e6369f1..ac483be 100644
 --- a/examples/minimax_h3/model_training/train.py
