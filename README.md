@@ -30,35 +30,23 @@ files/                                     ← 按仓库相对路径排放，直
   examples/.../model_training/train.py     【改】训练入口（全部 SLA 超参 + 阶段开关）
   examples/.../full/accelerate_config_zero3_16gpu_offload.yaml    stage2 / stage1-16卡
   examples/.../full/accelerate_config_single_gpu.yaml             stage1 单卡
-patches/sla-finetune.patch                 7 个改动文件的 git diff（与 files/ 二选一）
 scripts/
   stage1/  train_newcont_proj_1g_128.sh        ← stage1 单卡（--proj-only --teacher-align）
            train_newcont_proj_16g_128.sh       ← stage1 16 卡版
            launch_proj_1g_130.sh               ← stage1 nohup 启动器
-           train_proj_only.py                  ← stage1 独立实现（两遍法，不依赖 accelerate/zero3）
-           run_proj_train.sh                   ← 上面那个的启动器
            merge_proj_into_backbone.py         ← proj_l 合并回主干（stage2 起点）
   stage2/  train_backbone_full_130.sh          ← 最后一次全量微调
            train_backbone_full_run_130.sh      ← 其 nohup 启动器
            prep_stage2_full_128.py             ← 构建 stage2 数据缓存（4959 条）
   reference_108/  更早几轮的 768p 启动脚本（opencomp 156 / proj-156 / proj-1000 / merge_sla_dmd 等）
   container/      训练容器启动脚本（设备 + Ascend 驱动挂载）
-docs/
-  sla-two-stage-projonly-20260817.md    两阶段设计/踩坑全记录
-  sla-stage1-singlegpu-20260817.md      stage1 为什么走单卡
-  sla_h3_sparse_training_report.md      稀疏方案技术报告（列保护 vs 开放竞争实测）
-  h3_sla_training_log.md                到 8/15 的训练全记录 + 白屏根因链
-  sla_retrain_plan.md / h3_sla_training_plan.md   重训方案 / 原始计划
 ```
 
 ## stage1 怎么跑
 
 ```bash
 cd <repo>
-# A) 走训练框架（单卡）
 SLA_FORCE_OFF=1 ASCEND_RT_VISIBLE_DEVICES=0 bash scripts/stage1/train_newcont_proj_1g_128.sh
-# B) 独立两遍法脚本（不依赖 accelerate/zero3，实测 ~19 s/it，200 步约 64 分钟）
-python3 scripts/stage1/train_proj_only.py --steps 200 --lr 1e-4 --out <输出目录>
 ```
 核心参数：
 ```
@@ -66,7 +54,7 @@ python3 scripts/stage1/train_proj_only.py --steps 200 --lr 1e-4 --out <输出目
 --task "sft:train_align" --use_sla --sla_topk 0.05 --sla_feature_map softmax --sla_blkq 64 --sla_blkk 64
 ```
 环境变量：`SLA_PROJ_ONLY=1`（主干输出 detach、不跑稀疏反向）、`SLA_ALIGN_TEACHER=1`（每层累加对齐 MSE 并逐层 backward）。
-输出只有 proj_l（`step-N.safetensors` / `proj_l_stepN.pt`，100 keys）。
+输出只有 proj_l（`step-N.safetensors`，100 keys）。
 
 **合并成 stage2 起点：**
 ```bash
