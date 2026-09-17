@@ -9,8 +9,6 @@ SLA(Sparse-Linear Attention, arXiv:2509.24006)接到 DiT 上做少量全参微�
 - 最后一次实跑：stage1 单卡 1000 步 → 合并成 `newcont309-proj1000` → stage2 全量 4959 条 / ~310 步
   （topk 0.05，768×1344×124，ZeRO-3 16 卡 + CPU offload）
 
-## 两阶段是什么
-
 | 阶段 | 做什么 | 产物 |
 |---|---|---|
 | **stage1** | 冻结主干，**只训 `proj_l`**(50×128×128 ≈ 0.83M)；loss = 每层 `o_sla` vs 全注意力 `o_full` 的 MSE（teacher 对齐）|
@@ -119,5 +117,3 @@ posi["packed"]                 # img_pos/audio_pos/text_pos/img_position_ids/tok
 3. **teacher 对齐必须关 gradient checkpointing**：重算 forward 会二次触发每层 backward，梯度重复累加。
 4. **stage1 16 卡有风险**：bf16 主干全冻结 + 只有 fp32 proj_l 有梯度，会触发 deepspeed 0.19.4 的梯度分桶(ds_id)断言；
    单卡版（proj_l 仅 3MB）是已验证路线。
-
-许可：`sla_*.py` 来自 SLA 官方，Apache-2.0，引用 `arXiv:2509.24006`。
